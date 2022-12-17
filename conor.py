@@ -13,6 +13,8 @@ from torch import optim
 from torch.distributed.optim import DistributedOptimizer
 from torchvision import datasets, transforms
 
+torch.autograd.set_detect_anomaly(True)
+
 # Hardcoded versions according to https://github.com/pytorch/pytorch/issues/68385
 
 
@@ -146,6 +148,8 @@ param_server = None
 # A lock to ensure we only have one parameter server.
 global_lock = Lock()
 
+update_lock = mp.Lock()
+
 
 def get_parameter_server(num_gpus=0):
     """
@@ -209,7 +213,7 @@ class TrainerNet(nn.Module):
         return model_output
 
 
-def run_training_loop(rank, num_gpus, train_loader, test_loader):
+def run_training_loop(rank, num_gpus, train_loader, test_loader, ulock):
     # Runs the typical nueral network forward + backward + optimizer step, but
     # in a distributed fashion.
     net = TrainerNet(num_gpus=num_gpus)
@@ -219,20 +223,34 @@ def run_training_loop(rank, num_gpus, train_loader, test_loader):
 
     for i, (data, target) in enumerate(train_loader):
         with dist_autograd.context() as cid:
-            model_output = net(data)
-            # print(model_output)
-            target = target.to(model_output.device)
-            loss = F.nll_loss(model_output, target)
-            if i % 5 == 0:
-                print(f"Rank {rank} training batch {i} loss {loss.item()}")
-            dist_autograd.backward(cid, [loss])
+            with ulock:
+                model_output = net(data)
+                # print(model_output)
+
+                target = target.to(model_output.device)
+
+                # Tried this, but it still made all losses inf
+                # model_output = model_output.cpu()
+                # target = target.cpu()
+
+                loss = F.nll_loss(model_output, target)
+
+                # loss = loss.cpu()
+                # print(loss)
+                if i % 5 == 0:
+                    print(f"Rank {rank} training batch {i} loss {loss.item()}")
+                dist_autograd.backward(cid, [loss])
             # Ensure that dist autograd ran successfully and gradients were
             # returned.
-            assert remote_method(
-                ParameterServer.get_dist_gradients,
-                net.param_server_rref,
-                cid) != {}
-            opt.step(cid)
+                assert remote_method(
+                    ParameterServer.get_dist_gradients,
+                    net.param_server_rref,
+                    cid) != {}
+                # print(remote_method(
+                #     ParameterServer.get_dist_gradients,
+                #     net.param_server_rref,
+                #     cid))
+                opt.step(cid)
 
     print("Training complete!")
     print("Getting accuracy....")
@@ -260,7 +278,7 @@ def get_accuracy(test_loader, model):
 
 
 # Main loop for trainers.
-def run_worker(rank, world_size, num_gpus, train_loader, test_loader):
+def run_worker(rank, world_size, num_gpus, train_loader, test_loader, ulock):
     print(f"Worker rank {rank} initializing RPC")
 
     # ---------------------------------------------
@@ -283,7 +301,10 @@ def run_worker(rank, world_size, num_gpus, train_loader, test_loader):
 
     print(f"Worker {rank} done initializing RPC")
 
-    run_training_loop(rank, num_gpus, train_loader, test_loader)
+    with update_lock:
+        print(f'worker {rank} acquired lock')
+        run_training_loop(rank, num_gpus, train_loader, test_loader, ulock)
+        print(f'worker {rank} released lock')
     rpc.shutdown()
 
 
@@ -326,42 +347,93 @@ if __name__ == '__main__':
     os.environ['MASTER_ADDR'] = args.master_addr
     os.environ["MASTER_PORT"] = args.master_port
 
+    # processes = []
+    # world_size = args.world_size
+    # if args.rank == 0:
+    #     p = mp.Process(target=run_parameter_server, args=(0, world_size))
+    #     p.start()
+    #     processes.append(p)
+    # else:
+    #     # Get data to train on
+    #     train_loader = torch.utils.data.DataLoader(
+    #         datasets.MNIST('../data', train=True, download=True,
+    #                        transform=transforms.Compose([
+    #                            transforms.ToTensor(),
+    #                            transforms.Normalize((0.1307,), (0.3081,))
+    #                        ])),
+    #         batch_size=32, shuffle=True,)
+    #     test_loader = torch.utils.data.DataLoader(
+    #         datasets.MNIST(
+    #             '../data',
+    #             train=False,
+    #             transform=transforms.Compose([
+    #                 transforms.ToTensor(),
+    #                 transforms.Normalize((0.1307,), (0.3081,))
+    #             ])),
+    #         batch_size=32,
+    #         shuffle=True,
+    #     )
+    #     # start training worker on this node
+    #     p = mp.Process(
+    #         target=run_worker,
+    #         args=(
+    #             args.rank,
+    #             world_size, args.num_gpus,
+    #             train_loader,
+    #             test_loader))
+    #     p.start()
+    #     processes.append(p)
+
+    # for p in processes:
+    #     p.join()
+
     processes = []
     world_size = args.world_size
-    if args.rank == 0:
-        p = mp.Process(target=run_parameter_server, args=(0, world_size))
-        p.start()
-        processes.append(p)
-    else:
-        # Get data to train on
-        train_loader = torch.utils.data.DataLoader(
-            datasets.MNIST('../data', train=True, download=True,
-                           transform=transforms.Compose([
-                               transforms.ToTensor(),
-                               transforms.Normalize((0.1307,), (0.3081,))
-                           ])),
-            batch_size=32, shuffle=True,)
-        test_loader = torch.utils.data.DataLoader(
-            datasets.MNIST(
-                '../data',
-                train=False,
-                transform=transforms.Compose([
-                    transforms.ToTensor(),
-                    transforms.Normalize((0.1307,), (0.3081,))
-                ])),
-            batch_size=32,
-            shuffle=True,
-        )
-        # start training worker on this node
-        p = mp.Process(
-            target=run_worker,
-            args=(
-                args.rank,
-                world_size, args.num_gpus,
-                train_loader,
-                test_loader))
-        p.start()
-        processes.append(p)
+    update_lock = mp.Lock()
 
+    print(f'{world_size=}')
+    for r in range(world_size):
+        print(f'{r=}')
+        if r == 0:
+            print('STARTING PARAMETER SERVER')
+            p = mp.Process(target=run_parameter_server, args=(0, world_size))
+            print('PARAMETER SERVER PROCESS RETURNED')
+            p.start()
+            processes.append(p)
+        else:
+            print(f'STARTING WORKER {r}')
+            # Get data to train on
+            train_loader = torch.utils.data.DataLoader(
+                datasets.MNIST('../data', train=True, download=True,
+                               transform=transforms.Compose([
+                                   transforms.ToTensor(),
+                                   transforms.Normalize((0.1307,), (0.3081,))
+                               ])),
+                batch_size=32, shuffle=True,)
+            test_loader = torch.utils.data.DataLoader(
+                datasets.MNIST(
+                    '../data',
+                    train=False,
+                    transform=transforms.Compose([
+                        transforms.ToTensor(),
+                        transforms.Normalize((0.1307,), (0.3081,))
+                    ])),
+                batch_size=32,
+                shuffle=True,
+            )
+            # start training worker on this node
+            p = mp.Process(
+                target=run_worker,
+                args=(
+                    r,
+                    world_size, args.num_gpus,
+                    train_loader,
+                    test_loader,
+                    update_lock))
+            p.start()
+            processes.append(p)
+
+    print(f'loop join')
     for p in processes:
         p.join()
+    print(f'loop join end')
