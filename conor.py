@@ -118,7 +118,7 @@ class ParameterServer(nn.Module):
         out = self.model(inp)
         # This output is forwarded over RPC, which as of 1.5.0 only accepts CPU tensors.
         # Tensors must be moved in and out of GPU memory due to this.
-        out = out.to("cpu")
+        # out = out.to("cpu")
         return out
 
     # Use dist autograd to retrieve gradients accumulated for this model.
@@ -223,34 +223,36 @@ def run_training_loop(rank, num_gpus, train_loader, test_loader, ulock):
 
     for i, (data, target) in enumerate(train_loader):
         with dist_autograd.context() as cid:
-            with ulock:
-                model_output = net(data)
-                # print(model_output)
+            # with ulock:
+            param_rrefs = net.get_global_param_rrefs()
+            opt = DistributedOptimizer(optim.SGD, param_rrefs, lr=0.03)
+            model_output = net(data)
+            # print(model_output)
 
-                target = target.to(model_output.device)
+            target = target.to(model_output.device)
 
-                # Tried this, but it still made all losses inf
-                # model_output = model_output.cpu()
-                # target = target.cpu()
+            # Tried this, but it still made all losses inf
+            # model_output = model_output.cpu()
+            # target = target.cpu()
 
-                loss = F.nll_loss(model_output, target)
+            loss = F.nll_loss(model_output, target)
 
-                # loss = loss.cpu()
-                # print(loss)
-                if i % 5 == 0:
-                    print(f"Rank {rank} training batch {i} loss {loss.item()}")
-                dist_autograd.backward(cid, [loss])
+            # loss = loss.cpu()
+            # print(loss)
+            if i % 5 == 0:
+                print(f"Rank {rank} training batch {i} loss {loss.item()}")
+            dist_autograd.backward(cid, [loss])
             # Ensure that dist autograd ran successfully and gradients were
             # returned.
-                assert remote_method(
-                    ParameterServer.get_dist_gradients,
-                    net.param_server_rref,
-                    cid) != {}
-                # print(remote_method(
-                #     ParameterServer.get_dist_gradients,
-                #     net.param_server_rref,
-                #     cid))
-                opt.step(cid)
+            assert remote_method(
+                ParameterServer.get_dist_gradients,
+                net.param_server_rref,
+                cid) != {}
+            # print(remote_method(
+            #     ParameterServer.get_dist_gradients,
+            #     net.param_server_rref,
+            #     cid))
+            opt.step(cid)
 
     print("Training complete!")
     print("Getting accuracy....")
@@ -278,7 +280,7 @@ def get_accuracy(test_loader, model):
 
 
 # Main loop for trainers.
-def run_worker(rank, world_size, num_gpus, train_loader, test_loader, ulock):
+def run_worker(rank, world_size, num_gpus, train_loader, test_loader, ulock, epochs=1):
     print(f"Worker rank {rank} initializing RPC")
 
     # ---------------------------------------------
@@ -301,10 +303,10 @@ def run_worker(rank, world_size, num_gpus, train_loader, test_loader, ulock):
 
     print(f"Worker {rank} done initializing RPC")
 
-    with update_lock:
-        print(f'worker {rank} acquired lock')
+    print(f'worker {rank} acquired lock')
+    for e in range(epochs):
         run_training_loop(rank, num_gpus, train_loader, test_loader, ulock)
-        print(f'worker {rank} released lock')
+    print(f'worker {rank} released lock')
     rpc.shutdown()
 
 
@@ -340,6 +342,11 @@ if __name__ == '__main__':
         default="29500",
         help="""Port that master is listening on, will default to 29500 if not
         provided. Master must be able to accept network traffic on the host and port.""")
+    parser.add_argument(
+        "--epochs_per_worker",
+        type=int,
+        default=1,
+        help="""Number of epochs for each worker.""")
 
     args = parser.parse_args()
     assert args.rank is not None, "must provide rank argument."
@@ -392,6 +399,8 @@ if __name__ == '__main__':
     update_lock = mp.Lock()
 
     print(f'{world_size=}')
+
+    start = time.perf_counter()
     for r in range(world_size):
         print(f'{r=}')
         if r == 0:
@@ -429,7 +438,8 @@ if __name__ == '__main__':
                     world_size, args.num_gpus,
                     train_loader,
                     test_loader,
-                    update_lock))
+                    update_lock,
+                    args.epochs_per_worker))
             p.start()
             processes.append(p)
 
@@ -437,3 +447,5 @@ if __name__ == '__main__':
     for p in processes:
         p.join()
     print(f'loop join end')
+    end = time.perf_counter()
+    print(f'Elapsed time: {end - start}')
