@@ -396,38 +396,73 @@ if __name__ == '__main__':
     print(f'{world_size=}')
 
     start = time.perf_counter()
-    for r in range(world_size):
-        print(f'{r=}')
-        if r == 0:
-            print('STARTING PARAMETER SERVER')
-            p = mp.Process(target=run_parameter_server, args=(0, world_size))
-            print('PARAMETER SERVER PROCESS RETURNED')
-            p.start()
-            processes.append(p)
-        else:
-            print(f'STARTING WORKER {r}')
-            # Get data to train on
+
+
+# --------------------------------------------------------
+
+    def train(args, model, device, train_loader, optimizer, epoch):
+        model.train()
+        for batch_idx, (data, target) in enumerate(train_loader):
+            data, target = data.to(device), target.to(device)
+            optimizer.zero_grad()
+            output = model(data)
+            loss = F.nll_loss(output, target)
+            loss.backward()
+            optimizer.step()
+            if batch_idx % args.log_interval == 0:
+                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    epoch, batch_idx * len(data), len(train_loader.dataset),
+                    100. * batch_idx / len(train_loader), loss.item()))
+                if args.dry_run:
+                    break
+
+    def test(model, device, test_loader):
+        model.eval()
+        test_loss = 0
+        correct = 0
+        with torch.no_grad():
+            for data, target in test_loader:
+                data, target = data.to(device), target.to(device)
+                output = model(data)
+                # sum up batch loss
+                test_loss += F.nll_loss(output, target, reduction='sum').item()
+                # get the index of the max log-probability
+                pred = output.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+
+        test_loss /= len(test_loader.dataset)
+
+        print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+            test_loss, correct, len(test_loader.dataset),
+            100. * correct / len(test_loader.dataset)))
+
+    shared_model = Net()
+    optimizer = optim.SGD(shared_model.parameters(), lr=0.03)
+
+    # from multiprocessing import shared_memory
+    # shm_a = shared_memory.SharedMemory(create=True, size=1)
+
+    from multiprocessing import Manager, Process
+
+    # print(shm_a)
+    # print(type(shm_a))
+
+    with Manager() as manager:
+        manager_model = manager.Value(Net, shared_model)
+
+        workers = 1
+
+        for w in range(workers):
             mnist_train = datasets.MNIST('../data', train=True, download=True,
                                          transform=transforms.Compose([
                                              transforms.ToTensor(),
                                              transforms.Normalize(
                                                  (0.1307,), (0.3081,))
                                          ]))
-            mnist_train_len = len(mnist_train)
-            mnist_train_chunks = mnist_train_len // (world_size - 1)
-            start_arange = (r - 1) * mnist_train_chunks
-            end_arange = r * mnist_train_chunks
-            print(f'worker {r}: {start_arange}: {end_arange}')
-            mnist_train_subset = torch.utils.data.Subset(
-                mnist_train, list(np.arange(start_arange, end_arange)))
-            print(mnist_train_subset)
-            mnist_train_sampler = torch.utils.data.RandomSampler(
-                mnist_train_subset)
-
             train_loader = torch.utils.data.DataLoader(
-                mnist_train_subset,
+                mnist_train,
                 batch_size=32,
-                # shuffle=True,
+                shuffle=True,
             )
             test_loader = torch.utils.data.DataLoader(
                 datasets.MNIST(
@@ -440,22 +475,107 @@ if __name__ == '__main__':
                 batch_size=32,
                 shuffle=True,
             )
-            # start training worker on this node
-            p = mp.Process(
-                target=run_worker,
-                args=(
-                    r,
-                    world_size, args.num_gpus,
-                    train_loader,
-                    test_loader,
-                    update_lock,
-                    args.epochs_per_worker))
-            p.start()
-            processes.append(p)
+            device = 'cpu'
+            # scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
+            for epoch in range(1, args.epochs + 1):
+                train(args, manager_model, device,
+                      train_loader, optimizer, epoch)
+                test(manager_model, device, test_loader)
+                # scheduler.step()
 
-    print(f'loop join')
-    for p in processes:
-        p.join()
-    print(f'loop join end')
-    end = time.perf_counter()
-    print(f'Elapsed time: {end - start}')
+    # for r in range(world_size):
+    #     mnist_train = datasets.MNIST('../data', train=True, download=True,
+    #                                  transform=transforms.Compose([
+    #                                      transforms.ToTensor(),
+    #                                      transforms.Normalize(
+    #                                          (0.1307,), (0.3081,))
+    #                                  ]))
+    #     mnist_train_len = len(mnist_train)
+    #     mnist_train_chunks = mnist_train_len // (world_size - 1)
+    #     start_arange = (r - 1) * mnist_train_chunks
+    #     end_arange = r * mnist_train_chunks
+    #     mnist_train_subset = torch.utils.data.Subset(
+    #         mnist_train, list(np.arange(start_arange, end_arange)))
+    #     mnist_train_sampler = torch.utils.data.RandomSampler(
+    #         mnist_train_subset)
+
+    #     train_loader = torch.utils.data.DataLoader(
+    #         mnist_train_subset,
+    #         batch_size=32,
+    #         # shuffle=True,
+    #     )
+    #     test_loader = torch.utils.data.DataLoader(
+    #         datasets.MNIST(
+    #             '../data',
+    #             train=False,
+    #             transform=transforms.Compose([
+    #                 transforms.ToTensor(),
+    #                 transforms.Normalize((0.1307,), (0.3081,))
+    #             ])),
+    #         batch_size=32,
+    #         shuffle=True,
+    #     )
+
+    # for r in range(world_size):
+    #     print(f'{r=}')
+    #     if r == 0:
+    #         print('STARTING PARAMETER SERVER')
+    #         p = mp.Process(target=run_parameter_server, args=(0, world_size))
+    #         print('PARAMETER SERVER PROCESS RETURNED')
+    #         p.start()
+    #         processes.append(p)
+    #     else:
+    #         print(f'STARTING WORKER {r}')
+    #         # Get data to train on
+    #         mnist_train = datasets.MNIST('../data', train=True, download=True,
+    #                                      transform=transforms.Compose([
+    #                                          transforms.ToTensor(),
+    #                                          transforms.Normalize(
+    #                                              (0.1307,), (0.3081,))
+    #                                      ]))
+    #         mnist_train_len = len(mnist_train)
+    #         mnist_train_chunks = mnist_train_len // (world_size - 1)
+    #         start_arange = (r - 1) * mnist_train_chunks
+    #         end_arange = r * mnist_train_chunks
+    #         print(f'worker {r}: {start_arange}: {end_arange}')
+    #         mnist_train_subset = torch.utils.data.Subset(
+    #             mnist_train, list(np.arange(start_arange, end_arange)))
+    #         print(mnist_train_subset)
+    #         mnist_train_sampler = torch.utils.data.RandomSampler(
+    #             mnist_train_subset)
+
+    #         train_loader = torch.utils.data.DataLoader(
+    #             mnist_train_subset,
+    #             batch_size=32,
+    #             # shuffle=True,
+    #         )
+    #         test_loader = torch.utils.data.DataLoader(
+    #             datasets.MNIST(
+    #                 '../data',
+    #                 train=False,
+    #                 transform=transforms.Compose([
+    #                     transforms.ToTensor(),
+    #                     transforms.Normalize((0.1307,), (0.3081,))
+    #                 ])),
+    #             batch_size=32,
+    #             shuffle=True,
+    #         )
+    #         # start training worker on this node
+    #         p = mp.Process(
+    #             target=run_worker,
+    #             args=(
+    #                 r,
+    #                 world_size, args.num_gpus,
+    #                 train_loader,
+    #                 test_loader,
+    #                 update_lock,
+    #                 args.epochs_per_worker))
+    #         p.start()
+    #         processes.append(p)
+
+    # print(f'loop join')
+    # for p in processes:
+    #     p.join()
+    # print(f'loop join end')
+    # end = time.perf_counter()
+    # print(f'Elapsed time: {end - start}')
