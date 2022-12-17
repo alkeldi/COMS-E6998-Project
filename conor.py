@@ -218,41 +218,41 @@ def run_training_loop(rank, num_gpus, train_loader, test_loader, ulock):
     # in a distributed fashion.
     net = TrainerNet(num_gpus=num_gpus)
     # Build DistributedOptimizer.
-    param_rrefs = net.get_global_param_rrefs()
-    opt = DistributedOptimizer(optim.SGD, param_rrefs, lr=0.03)
+    # param_rrefs = net.get_global_param_rrefs()
+    # opt = DistributedOptimizer(optim.SGD, param_rrefs, lr=0.03)
 
     for i, (data, target) in enumerate(train_loader):
         with dist_autograd.context() as cid:
-            # with ulock:
-            param_rrefs = net.get_global_param_rrefs()
-            opt = DistributedOptimizer(optim.SGD, param_rrefs, lr=0.03)
-            model_output = net(data)
-            # print(model_output)
+            with ulock:
+                param_rrefs = net.get_global_param_rrefs()
+                opt = DistributedOptimizer(optim.SGD, param_rrefs, lr=0.03)
+                model_output = net(data)
+                # print(model_output)
 
-            target = target.to(model_output.device)
+                target = target.to(model_output.device)
 
-            # Tried this, but it still made all losses inf
-            # model_output = model_output.cpu()
-            # target = target.cpu()
+                # Tried this, but it still made all losses inf
+                # model_output = model_output.cpu()
+                # target = target.cpu()
 
-            loss = F.nll_loss(model_output, target)
+                loss = F.nll_loss(model_output, target)
 
-            # loss = loss.cpu()
-            # print(loss)
-            if i % 5 == 0:
-                print(f"Rank {rank} training batch {i} loss {loss.item()}")
-            dist_autograd.backward(cid, [loss])
-            # Ensure that dist autograd ran successfully and gradients were
-            # returned.
-            assert remote_method(
-                ParameterServer.get_dist_gradients,
-                net.param_server_rref,
-                cid) != {}
-            # print(remote_method(
-            #     ParameterServer.get_dist_gradients,
-            #     net.param_server_rref,
-            #     cid))
-            opt.step(cid)
+                # loss = loss.cpu()
+                # print(loss)
+                if i % 5 == 0:
+                    print(f"Rank {rank} training batch {i} loss {loss.item()}")
+                dist_autograd.backward(cid, [loss])
+                # Ensure that dist autograd ran successfully and gradients were
+                # returned.
+                assert remote_method(
+                    ParameterServer.get_dist_gradients,
+                    net.param_server_rref,
+                    cid) != {}
+                # print(remote_method(
+                #     ParameterServer.get_dist_gradients,
+                #     net.param_server_rref,
+                #     cid))
+                opt.step(cid)
 
     print("Training complete!")
     print("Getting accuracy....")
