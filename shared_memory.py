@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+from multiprocessing.managers import BaseManager
 from threading import Lock
 
 import numpy as np
@@ -77,6 +78,13 @@ class Net(nn.Module):
         output = F.log_softmax(x, dim=1)
         return output
 
+    def parameters(self):
+        # print('looooooool')
+        params = super(Net, self).parameters()
+        # print(params)
+        # print(list(params))
+        # print('looooool end')
+        return list(params)
 
 # --------- Helper Methods --------------------
 
@@ -84,6 +92,8 @@ class Net(nn.Module):
 # RRef. Other args are passed in as arguments to the function called.
 # Useful for calling instance methods. method could be any matching function, including
 # class methods.
+
+
 def call_method(method, rref, *args, **kwargs):
     return method(rref.local_value(), *args, **kwargs)
 
@@ -308,12 +318,16 @@ def run_worker(rank, world_size, num_gpus, train_loader, test_loader, ulock, epo
 def train(args, model, device, train_loader, optimizer, epoch):
     print(dir(model))
     print('train version:', model)
-    print('train version get:', model)
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
-        output = model(data)
+        # print('stuff')
+        # print(model)
+        # print(type(model))
+        # print(dir(model))
+        with torch.no_grad():
+            output = model.forward(data)
         loss = F.nll_loss(output, target)
         loss.backward()
         optimizer.step()
@@ -345,6 +359,11 @@ def test(model, device, test_loader):
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
         test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
+
+
+class CustomManager(BaseManager):
+    # nothing
+    pass
 
 
 if __name__ == '__main__':
@@ -404,7 +423,7 @@ if __name__ == '__main__':
 
     shared_model = Net()
     print("original:", shared_model)
-    optimizer = optim.SGD(shared_model.parameters(), lr=0.03)
+    # optimizer = optim.SGD(shared_model.parameters(), lr=0.03)
 
     # from multiprocessing import shared_memory
     # shm_a = shared_memory.SharedMemory(create=True, size=1)
@@ -414,8 +433,22 @@ if __name__ == '__main__':
     # print(shm_a)
     # print(type(shm_a))
 
-    with Manager() as manager:
-        manager_model = manager.Value(Net, shared_model)
+    CustomManager.register('net', Net)
+
+    with CustomManager() as manager:
+
+        mm = manager.net()
+
+        # manager_model = manager.Value(Net, shared_model)
+
+        # mm_params = mm.parameters()
+        old_m = Net()
+        # print('old', old_m)
+        # print('old', old_m.parameters())
+        # print('mm', mm)
+        # print('mm', list(mm.parameters()))
+
+        optimizer = optim.SGD(mm.parameters(), lr=0.03)
 
         workers = 1
 
@@ -447,7 +480,7 @@ if __name__ == '__main__':
             # for epoch in range(1, args.epochs + 1):
             for epoch in range(1):
                 print('epoch', epoch)
-                p = Process(target=train, args=(args, shared_model,
+                p = Process(target=train, args=(args, mm,
                             device, train_loader, optimizer, epoch))
                 # train(args, manager_model, device,
                 #       train_loader, optimizer, epoch)
