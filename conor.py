@@ -128,8 +128,8 @@ class ParameterServer(nn.Module):
         # Tensors must be moved in and out of GPU memory due to this.
         cpu_grads = {}
         for k, v in grads.items():
-            # k_cpu, v_cpu = k.to("cpu"), v.to("cpu")
-            k_cpu, v_cpu = k.to("mps"), v.to("mps")
+            k_cpu, v_cpu = k.to("cpu"), v.to("cpu")
+            # k_cpu, v_cpu = k.to("mps"), v.to("mps")
             cpu_grads[k_cpu] = v_cpu
         return cpu_grads
 
@@ -167,6 +167,18 @@ def run_parameter_server(rank, world_size):
     # in this case means that the parameter server will wait for all trainers
     # to complete, and then exit.
     print("PS master initializing RPC")
+
+    # ----------------------------------------------------------------
+
+    # TODO: Remove? copied from https://h-huang.github.io/tutorials/recipes/cuda_rpc.html
+    # options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=128)
+    # options.set_device_map("trainer_1", {'mps:0': 'mps:0'})
+    # print('device maps', options.device_maps)
+    # rpc.init_rpc(name="parameter_server", rank=rank,
+    #              world_size=world_size, rpc_backend_options=options)
+
+    # ----------------------------------------------------------------
+
     rpc.init_rpc(name="parameter_server", rank=rank, world_size=world_size)
     print("RPC initialized! Running parameter server...")
     rpc.shutdown()
@@ -208,7 +220,7 @@ def run_training_loop(rank, num_gpus, train_loader, test_loader):
     for i, (data, target) in enumerate(train_loader):
         with dist_autograd.context() as cid:
             model_output = net(data)
-            print(model_output)
+            # print(model_output)
             target = target.to(model_output.device)
             loss = F.nll_loss(model_output, target)
             if i % 5 == 0:
@@ -250,6 +262,20 @@ def get_accuracy(test_loader, model):
 # Main loop for trainers.
 def run_worker(rank, world_size, num_gpus, train_loader, test_loader):
     print(f"Worker rank {rank} initializing RPC")
+
+    # ---------------------------------------------
+
+    # TODO: Remove? copied from https://h-huang.github.io/tutorials/recipes/cuda_rpc.html
+    # options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=128)
+    # options.set_device_map("parameter_server", {'mps:0': 'mps:0'})
+    # print('device maps', options.device_maps)
+    # rpc.init_rpc(
+    #     name=f"trainer_{rank}",
+    #     rank=rank,
+    #     world_size=world_size, rpc_backend_options=options)
+
+    # ---------------------------------------------
+
     rpc.init_rpc(
         name=f"trainer_{rank}",
         rank=rank,
