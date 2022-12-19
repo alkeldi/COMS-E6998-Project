@@ -1,3 +1,4 @@
 *.png
 /CIFAR*
+/data*
 __pycache__/
