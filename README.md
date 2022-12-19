@@ -25,6 +25,13 @@ Shared Memory
     - https://www.macobserver.com/analysis/understanding-apples-unified-memory-architecture/
 
 
+## Approach 1: Unified Memory
+To test Apple's unified memory, one can run the script in `unified_memory_overhead.py` and obtain a figure like the one below. 
+![](./unified_memory_overhead.png)
+
+Although in theory the overhead should be minimal, the plot shows a huge slowdown caused by moving the model back and forth.
+
+
 ## Approach 2: Parameter Server
 Our Parameter Server code can be found in `parameter_server/parameter_server.py`.
 
