@@ -6,7 +6,43 @@
 
 
 ## Approach 2: Parameter Server
-For the parameter server approach, we followed 
+Our Parameter Server code can be found in `parameter_server.py`.
+
+We based our implementation off of [this](https://pytorch.org/tutorials/intermediate/rpc_param_server_tutorial.html) pytorch reference. As was noted, we found that between the locking requirements on the parameter server, along with the additional overhead of communicated through RPC, this strategy was not successful. See `UPDATE LOCK NOTE` in `parameter_server.py` for more info on exactly where the lock in necessary, and/or to experiment with removing the lock to reproduce:
+
+```
+RuntimeError: Error on Node 0: one of the variables needed for gradient computation has been modified by an inplace operation.
+```
+
+The main function is:
+
+```
+def launch_ps_and_workers(
+        world_size,
+        epochs_per_worker,
+        num_gpus,
+        train_dataloader,
+        test_dataloader): {...}
+```
+`launch_ps_and_workers` launches 1 parameter server, `(world_size - 1)` workers, trains on the provided data, then logs test accuracy.
+
+## Parameter Server end-to-end example
+For an end-to-end example, run `parameter_server_example.py`:
+```
+python parameter_server_example.py
+```
+
+In this file, we consider 2 versions of the same model and are able to see that the effects of splitting training across a parameter server are fairly low. Specifically, we consider:
+
+1. 1 worker training 4 epochs
+2. 4 workers training 1 epoch each
+
+We call `launch_ps_and_workers` for each configuration, then print the training times. For example:
+
+```
+Elapsed time model 1: 197.349024625
+Elapsed time model 2: 188.517587833
+```
 
 ## Approach 3: Hogwild!
 Our Hogwild! code can be found in `hogwild.py`. The code enables easy experimenting with different models/data, as well as different configurations of how to distribute work across one or more workers/processes.
@@ -41,6 +77,10 @@ def chart_losses(
     title='Comparing Training Losses Across Configurations'): {...}
 ```
 `chart_losses` takes a dictionary where the keys are model labels (ex: '4 processes x 1 epoch NN') and the value are a list of accumlated loss values and generates a chart displaying the data. Optionally, a `title` can be provided.
+
+Example:
+
+![chart](chart_losses_example.png)
 
 ## Hogwild! end-to-end example
 For an end-to-end example, run `hogwild_example.py`:

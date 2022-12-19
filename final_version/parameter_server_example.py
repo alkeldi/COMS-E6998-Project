@@ -36,7 +36,7 @@ if __name__ == '__main__':
 
     # world size n = 1 parameter server + (n-1) workers
     world_size1 = 2
-    epochs_per_worker1 = 2
+    epochs_per_worker1 = 4
     start1 = time.perf_counter()
     launch_ps_and_workers(
         world_size1,
@@ -45,10 +45,9 @@ if __name__ == '__main__':
         train_dataloader,
         test_dataloader)
     end1 = time.perf_counter()
-    print(f'Elapsed time: {end1 - start1}')
 
     # world size n = 1 parameter server + (n-1) workers
-    world_size2 = 3
+    world_size2 = 5
     epochs_per_worker2 = 1
     start2 = time.perf_counter()
     launch_ps_and_workers(
@@ -58,4 +57,6 @@ if __name__ == '__main__':
         train_dataloader,
         test_dataloader)
     end2 = time.perf_counter()
-    print(f'Elapsed time: {end2 - start2}')
+
+    print(f'Elapsed time model 1: {end1 - start1}')
+    print(f'Elapsed time model 2: {end2 - start2}')
