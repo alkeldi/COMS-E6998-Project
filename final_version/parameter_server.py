@@ -1,9 +1,7 @@
-import argparse
 import os
 import time
 from threading import Lock
 
-import numpy as np
 import torch
 import torch.distributed.autograd as dist_autograd
 import torch.distributed.rpc as rpc
@@ -15,6 +13,13 @@ from torch.distributed.optim import DistributedOptimizer
 from torchvision import datasets, transforms
 
 # Refence source: https://pytorch.org/tutorials/intermediate/rpc_param_server_tutorial.html
+
+# Note: For error
+# libc++abi: terminating with uncaught exception of type std::runtime_error: In connectFromLoop at tensorpipe/transport/uv/uv.h:297 "rv < 0: too many open files"libc++abi: terminating with uncaught exception of type std::runtime_error: In connectFromLoop at tensorpipe/transport/uv/uv.h:297 "rv < 0: too many open files"
+# increase the limit by running `ulimit -n 3000` (or some other large number)
+
+# See UPDATE LOCK NOTE comment below for more info on locking and why this strategy
+# ends up seeing performance similar to sequential epochs on a single process.
 
 
 def get_device_str(num_gpus):
@@ -199,12 +204,16 @@ def run_training_loop(rank, world_size, num_gpus, train_loader, test_loader, ulo
 
     for i, (data, target) in enumerate(train_loader):
         with dist_autograd.context() as cid:
+            # UPDATE LOCK NOTE: This is the heart of the issue. This lock was added
+            # because with it, we see the following error:
+            # RuntimeError: Error on Node 0: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [32, 1, 3, 3]] is at version 18; expected version 17 instead. Hint: enable anomaly detection to find the operation that failed to compute its gradient, with torch.autograd.set_detect_anomaly(True).
+            # Comment out to see the difference.
             with ulock:
                 model_output = net(data)
 
                 loss = F.nll_loss(model_output, target)
 
-                if i % 5 == 0:
+                if i % 100 == 0:
                     print(f"Rank {rank} training batch {i} loss {loss.item()}")
                 dist_autograd.backward(cid, [loss])
                 opt.step(cid)
@@ -252,50 +261,21 @@ def run_worker(rank, world_size, num_gpus, train_loader, test_loader, ulock, epo
     print(f'worker {rank} released lock')
     rpc.shutdown()
 
-# Note: For error
-# libc++abi: terminating with uncaught exception of type std::runtime_error: In connectFromLoop at tensorpipe/transport/uv/uv.h:297 "rv < 0: too many open files"libc++abi: terminating with uncaught exception of type std::runtime_error: In connectFromLoop at tensorpipe/transport/uv/uv.h:297 "rv < 0: too many open files"
-# increase the limit by running `ulimit -n 3000` (or some other large number)
 
+def launch_ps_and_workers(
+        world_size,
+        epochs_per_worker,
+        num_gpus,
+        train_dataloader,
+        test_dataloader):
 
-if __name__ == '__main__':
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ["MASTER_PORT"] = '29500'
+    print()
+    print(
+        f'***** Training with {world_size - 1} worker(s) for {epochs_per_worker} epochs each. *****')
+    print()
 
-    # world size n = 1 parameter server, (n-1) workers
-    world_size = 5
-    epochs_per_worker = 1
-
-    num_gpus = 0
     processes = []
-
-    # Here is the heart of the matter. If the update lock is removed entirely,
-    #
     update_lock = mp.Lock()
-
-    # Create dataloaders
-    train_dataloader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=True, download=True,
-                       transform=transforms.Compose([
-                           transforms.ToTensor(),
-                           transforms.Normalize(
-                               (0.1307,), (0.3081,))
-                       ])),
-        batch_size=32,
-        shuffle=True,
-    )
-    test_dataloader = torch.utils.data.DataLoader(
-        datasets.MNIST(
-            '../data',
-            train=False,
-            transform=transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize((0.1307,), (0.3081,))
-            ])),
-        batch_size=32,
-        shuffle=True,
-    )
-
-    start = time.perf_counter()
 
     # Launch parameter server and workers
     for r in range(world_size):
@@ -320,5 +300,3 @@ if __name__ == '__main__':
 
     for p in processes:
         p.join()
-    end = time.perf_counter()
-    print(f'Elapsed time: {end - start}')
