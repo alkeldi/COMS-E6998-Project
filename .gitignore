@@ -1,2 +1,7 @@
 venv
 data
+nn_mnist.png
+resnet18cifar10.png
+/CIFAR*
+/data*
+__pycache__/
