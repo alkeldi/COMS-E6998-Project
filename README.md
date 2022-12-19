@@ -4,6 +4,26 @@
 **Group:** Ali Al-keldi and Conor Flanagan  
 **Slide Deck:** [Google Drive](https://docs.google.com/presentation/d/1RB412bl672gIyrJXVMs1iijhJa7x8duf3cUQWq8UoHw/edit#slide=id.p)
 
+## Summary
+Deep learning can be time consuming and cost prohibitive for individuals. Can we effectively reduce training time on personal machines with minimal code change?
+
+Approach: Experiment with different parallel training methods on individual machines and compare results. See Slide Deck for further details.
+
+## References
+- Parameter Servers (With Distributed Autograd)
+    - https://www.cs.cmu.edu/~muli/file/ps.pdf 
+    - https://pytorch.org/tutorials/intermediate/rpc_param_server_tutorial.html 
+- Hogwild!
+    - https://arxiv.org/pdf/1106.5730.pdf
+    - https://github.com/pytorch/examples/blob/main/mnist_hogwild/main.py 
+- Multiprocessing
+    - https://docs.python.org/3/library/multiprocessing.html 
+Shared Memory
+    - https://docs.python.org/3/library/multiprocessing.shared_memory.html 
+    - https://docs.python.org/3/library/multiprocessing.html#multiprocessing.Manager 
+- Apple Silicon Unified Memory
+    - https://www.macobserver.com/analysis/understanding-apples-unified-memory-architecture/
+
 
 ## Approach 2: Parameter Server
 Our Parameter Server code can be found in `parameter_server/parameter_server.py`.
