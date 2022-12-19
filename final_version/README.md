@@ -8,7 +8,7 @@
 ## Approach 2: Parameter Server
 Our Parameter Server code can be found in `parameter_server.py`.
 
-We based our implementation off of [this](https://pytorch.org/tutorials/intermediate/rpc_param_server_tutorial.html) pytorch reference. As was noted, we found that between the locking requirements on the parameter server, along with the additional overhead of communicated through RPC, this strategy was not successful. See `UPDATE LOCK NOTE` in `parameter_server.py` for more info on exactly where the lock in necessary, and/or to experiment with removing the lock to reproduce:
+We based our implementation on of [this](https://pytorch.org/tutorials/intermediate/rpc_param_server_tutorial.html) pytorch reference. As was noted, we found that between the locking requirements on the parameter server, along with the additional overhead of communicated through RPC, this strategy was not successful. See `UPDATE LOCK NOTE` in `parameter_server.py` for more info on exactly where the lock in necessary, and/or to experiment with removing the lock to reproduce:
 
 ```
 RuntimeError: Error on Node 0: one of the variables needed for gradient computation has been modified by an inplace operation.
@@ -24,7 +24,7 @@ def launch_ps_and_workers(
         train_dataloader,
         test_dataloader): {...}
 ```
-`launch_ps_and_workers` launches 1 parameter server, `(world_size - 1)` workers, trains on the provided data, then logs test accuracy.
+`launch_ps_and_workers` launches 1 parameter server, `(world_size - 1)` workers, trains on the provided data, and logs test accuracy.
 
 ## Parameter Server end-to-end example
 For an end-to-end example, run `parameter_server_example.py`:
