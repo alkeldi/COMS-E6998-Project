@@ -12,7 +12,7 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 
 
-def training_loop_with_device_switching(model, trainloader, criterion, optimizer, epochs, print_each=200):
+def training_loop(model, trainloader, criterion, optimizer, epochs, move_model, print_each=200):
     time_begin = time.time()
 
     # get devices
@@ -49,9 +49,10 @@ def training_loop_with_device_switching(model, trainloader, criterion, optimizer
                 print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / print_each:.3f}')
                 running_loss = 0.0
             
-            # move model cpu, then back to accelerator
-            model = model.to(CPU)
-            model = model.to(ACCELERATOR)
+            # move model to cpu, then back to accelerator (GPU, MPS)
+            if move_model:
+                model = model.to(CPU)
+                model = model.to(ACCELERATOR)
 
         current_time = time.time() - time_begin
         time_at_epoch.append(current_time)
@@ -71,17 +72,23 @@ trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE, shuff
 # testloader = torch.utils.data.DataLoader(testset, batch_size=BATCH_SIZE, shuffle=False)
 
 # model info
-model = models.resnet34()
+model_no_switching = models.resnet34()
+model_with_switching = models.resnet34()
+optimizer_no_switching = optim.SGD(model_no_switching.parameters(), lr=0.001, momentum=0.9)
+optimizer_with_switching = optim.SGD(model_with_switching.parameters(), lr=0.001, momentum=0.9)
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
 # start
-time_at_epoch = training_loop_with_device_switching(model, trainloader, criterion, optimizer, EPOCHS)
-epochs = range(1, len(time_at_epoch)+1)
-plt.plot(epochs, time_at_epoch)
+time_no_switching = training_loop(model_no_switching, trainloader, criterion, optimizer_no_switching, EPOCHS, False)
+time_with_switching = training_loop(model_with_switching, trainloader, criterion, optimizer_with_switching, EPOCHS, True)
+epochs = range(1, len(time_no_switching)+1)
+
+plt.plot(epochs, time_no_switching, label='Regular')
+plt.plot(epochs, time_with_switching, label='Device Switching')
 plt.xlabel('epoch')
 plt.ylabel('time')
-plt.title("Training Time vs. Epoch (Temporary Device Switching)")
+plt.legend()
+plt.title("Training Time vs. Epoch")
 plt.show()
 
 
