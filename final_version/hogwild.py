@@ -103,6 +103,9 @@ def log_elapsed_time(num_processes, epochs_per_process, start, end):
         f'Processes: {num_processes}, Epochs: {num_processes} * {epochs_per_process} = {num_processes * epochs_per_process}, Elapsed time: {end - start}')
 
 
+# Chart the training losses over each batch for one or more models. The keys of the
+# dict are model labels (ex: '4 process x 1 epoch NN'), while the value are a list
+# of loss values.
 def chart_losses(losses_dict, title='Comparing Training Losses Across Configurations'):
     for configuration, losses in losses_dict.items():
         batches_range = range(len(losses))
@@ -118,10 +121,11 @@ def chart_losses(losses_dict, title='Comparing Training Losses Across Configurat
 if __name__ == '__main__':
     # Example workflow for comparing the speed/performance of a model built
     # with different configurations of processes and how epochs get split
-    # across them. Here, we consider a simple Neural Network trained on MNIST.
-    # One version of the model was trained using 1 process and 4 (sequential) epochs,
-    # while the other version was trained using 4 processes, with 1 epoch each,
-    # executed in parallel.
+    # across them. Here, we consider a simple Neural Network trained on MNIST,
+    # using different configurations:
+    # 1. 1 process with 4 epochs
+    # 2. 4 processes with 1 epoch each, trained in parallel
+    # 3. 2 processes with 2 epochs each
 
     # Create dataloaders
     transform = transforms.Compose([
@@ -138,17 +142,18 @@ if __name__ == '__main__':
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset, batch_size=32, shuffle=True)
 
+    log_interval = 10
+    device = 'cpu'
+
     # Specify a '4 processes by 1 epoch' model
     start1 = time.time()
     model = SimpleNN()
-    num_processes = 4
-    epochs_per_process = 1
+    num_processes1 = 4
+    epochs_per_process1 = 1
     optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
-    device = 'cpu'
-    log_interval = 10
     loss_tracker_4_by_1 = mp.Manager().list()
 
-    train_model(model, train_dataloader, num_processes, epochs_per_process,
+    train_model(model, train_dataloader, num_processes1, epochs_per_process1,
                 optimizer, device, log_interval, loss_tracker_4_by_1)
     test(model, device, test_dataloader)
     end1 = time.time()
@@ -156,24 +161,37 @@ if __name__ == '__main__':
     # Specify a '1 process by 4 epochs' model
     start2 = time.time()
     model = SimpleNN()
-    num_processes = 1
-    epochs_per_process = 4
+    num_processes2 = 1
+    epochs_per_process2 = 4
     optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
-    device = 'cpu'
-    log_interval = 10
     loss_tracker_1_by_4 = mp.Manager().list()
 
-    train_model(model, train_dataloader, num_processes, epochs_per_process,
+    train_model(model, train_dataloader, num_processes2, epochs_per_process2,
                 optimizer, device, log_interval, loss_tracker_1_by_4)
     test(model, device, test_dataloader)
     end2 = time.time()
 
-    # Compare time
-    log_elapsed_time(num_processes, epochs_per_process, start1, end1)
-    log_elapsed_time(num_processes, epochs_per_process, start2, end2)
+    # Specify a '2 process by 2 epochs' model
+    start3 = time.time()
+    model = SimpleNN()
+    num_processes3 = 2
+    epochs_per_process3 = 2
+    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
+    loss_tracker_2_by_2 = mp.Manager().list()
 
-    # Compare training loss via chart
+    train_model(model, train_dataloader, num_processes3, epochs_per_process3,
+                optimizer, device, log_interval, loss_tracker_2_by_2)
+    test(model, device, test_dataloader)
+    end3 = time.time()
+
+    # Compare times
+    log_elapsed_time(num_processes1, epochs_per_process1, start1, end1)
+    log_elapsed_time(num_processes2, epochs_per_process2, start2, end2)
+    log_elapsed_time(num_processes2, epochs_per_process3, start3, end3)
+
+    # Compare training losses via chart
     chart_losses({
         '4 processes x 1 epoch NN': loss_tracker_4_by_1,
-        '1 process x 4 epochs NN': loss_tracker_1_by_4
+        '2 processes x 2 epochs NN': loss_tracker_2_by_2,
+        '1 process x 4 epochs NN': loss_tracker_1_by_4,
     })
