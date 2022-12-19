@@ -6,7 +6,7 @@
 
 
 ## Approach 2: Parameter Server
-Our Parameter Server code can be found in `parameter_server.py`.
+Our Parameter Server code can be found in `parameter_server/parameter_server.py`.
 
 We based our implementation on of [this](https://pytorch.org/tutorials/intermediate/rpc_param_server_tutorial.html) pytorch reference. As was noted, we found that between the locking requirements on the parameter server, along with the additional overhead of communicated through RPC, this strategy was not successful. See `UPDATE LOCK NOTE` in `parameter_server.py` for more info on exactly where the lock in necessary, and/or to experiment with removing the lock to reproduce:
 
@@ -27,9 +27,9 @@ def launch_ps_and_workers(
 `launch_ps_and_workers` launches 1 parameter server, `(world_size - 1)` workers, trains on the provided data, and logs test accuracy.
 
 ## Parameter Server end-to-end example
-For an end-to-end example, run `parameter_server_example.py`:
+For an end-to-end example, run `parameter_server/parameter_server_example.py`:
 ```
-python parameter_server_example.py
+python parameter_server/parameter_server_example.py
 ```
 
 In this file, we consider 2 versions of the same model and are able to see that the effects of splitting training across a parameter server are fairly low. Specifically, we consider:
@@ -45,7 +45,7 @@ Elapsed time model 2: 188.517587833
 ```
 
 ## Approach 3: Hogwild!
-Our Hogwild! code can be found in `hogwild.py`. The code enables easy experimenting with different models/data, as well as different configurations of how to distribute work across one or more workers/processes.
+Our Hogwild! code can be found in `hogwild/hogwild.py`. The code enables easy experimenting with different models/data, as well as different configurations of how to distribute work across one or more workers/processes.
 
 The main function are:
 
@@ -83,9 +83,9 @@ Example:
 ![chart](chart_losses_example.png)
 
 ## Hogwild! end-to-end example
-For an end-to-end example, run `hogwild_example.py`:
+For an end-to-end example, run `hogwild/hogwild_example.py`:
 ```
-python hogwild_example.py
+python hogwild/hogwild_example.py
 ```
 
 In this file, we consider 3 versions of the same model:
