@@ -207,7 +207,7 @@ if __name__ == '__main__':
                                 transform=transform)
     train_size = int(len(train_data) * 0.8)
     val_size = int(len(train_data) - train_size)
-    train_data, val_data = random_split(train_data, [train_size, val_size])
+    _, val_data = random_split(train_data, [train_size, val_size])
     test_data = datasets.MNIST('./data', train=False,
                                transform=transform)
 
