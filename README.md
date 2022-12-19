@@ -18,7 +18,7 @@ Approach: Experiment with different parallel training methods on individual mach
     - https://github.com/pytorch/examples/blob/main/mnist_hogwild/main.py 
 - Multiprocessing
     - https://docs.python.org/3/library/multiprocessing.html 
-Shared Memory
+- Shared Memory
     - https://docs.python.org/3/library/multiprocessing.shared_memory.html 
     - https://docs.python.org/3/library/multiprocessing.html#multiprocessing.Manager 
 - Apple Silicon Unified Memory
