@@ -1,9 +1,7 @@
-import argparse
 import os
 import time
 from threading import Lock
 
-import numpy as np
 import torch
 import torch.distributed.autograd as dist_autograd
 import torch.distributed.rpc as rpc
@@ -14,23 +12,24 @@ from torch import optim
 from torch.distributed.optim import DistributedOptimizer
 from torchvision import datasets, transforms
 
-torch.autograd.set_detect_anomaly(True)
+# Refence source: https://pytorch.org/tutorials/intermediate/rpc_param_server_tutorial.html
 
-# Hardcoded versions according to https://github.com/pytorch/pytorch/issues/68385
+# Note: For error
+# libc++abi: terminating with uncaught exception of type std::runtime_error: In connectFromLoop at tensorpipe/transport/uv/uv.h:297 "rv < 0: too many open files"libc++abi: terminating with uncaught exception of type std::runtime_error: In connectFromLoop at tensorpipe/transport/uv/uv.h:297 "rv < 0: too many open files"
+# increase the limit by running `ulimit -n 3000` (or some other large number)
+
+# See UPDATE LOCK NOTE comment below for more info on locking and why this strategy
+# ends up seeing performance similar to sequential epochs on a single process.
 
 
 def get_device_str(num_gpus):
     if num_gpus == 0:
-        print('Using CPU (num_gpus = 0 arg)')
         device_str = 'cpu'
     elif torch.cuda.is_available() and num_gpus > 0:
-        print('Using CUDA')
         device_str = 'cuda:0'
     elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        print('Using Apple Silicon')
         device_str = 'mps'
     else:
-        print('Using CPU')
         device_str = 'cpu'
     return device_str
 
@@ -40,11 +39,9 @@ def get_device_str(num_gpus):
 class Net(nn.Module):
     def __init__(self, num_gpus=0):
         super(Net, self).__init__()
-        print(f"Using {num_gpus} GPUs to train")
         self.num_gpus = num_gpus
         device_str = get_device_str(num_gpus)
         device = torch.device(device_str)
-        print(f"Putting first 2 convs on {str(device)}")
         # Put conv layers on the first cuda device, or CPU if no cuda device
         self.conv1 = nn.Conv2d(1, 32, 3, 1).to(device)
         self.conv2 = nn.Conv2d(32, 64, 3, 1).to(device)
@@ -108,8 +105,6 @@ class ParameterServer(nn.Module):
         model = Net(num_gpus=num_gpus)
         self.model = model
 
-        # Custom code https://towardsdatascience.com/installing-pytorch-on-apple-m1-chip-with-gpu-acceleration-3351dc44d67c
-        print('INITIALIZING PARAMETER SERVER')
         device_str = get_device_str(num_gpus)
 
         self.input_device = torch.device(device_str)
@@ -132,7 +127,6 @@ class ParameterServer(nn.Module):
         cpu_grads = {}
         for k, v in grads.items():
             k_cpu, v_cpu = k.to("cpu"), v.to("cpu")
-            # k_cpu, v_cpu = k.to("mps"), v.to("mps")
             cpu_grads[k_cpu] = v_cpu
         return cpu_grads
 
@@ -148,8 +142,6 @@ class ParameterServer(nn.Module):
 param_server = None
 # A lock to ensure we only have one parameter server.
 global_lock = Lock()
-
-update_lock = mp.Lock()
 
 
 def get_parameter_server(num_gpus=0):
@@ -172,18 +164,6 @@ def run_parameter_server(rank, world_size):
     # in this case means that the parameter server will wait for all trainers
     # to complete, and then exit.
     print("PS master initializing RPC")
-
-    # ----------------------------------------------------------------
-
-    # TODO: Remove? copied from https://h-huang.github.io/tutorials/recipes/cuda_rpc.html
-    # options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=128)
-    # options.set_device_map("trainer_1", {'mps:0': 'mps:0'})
-    # print('device maps', options.device_maps)
-    # rpc.init_rpc(name="parameter_server", rank=rank,
-    #              world_size=world_size, rpc_backend_options=options)
-
-    # ----------------------------------------------------------------
-
     rpc.init_rpc(name="parameter_server", rank=rank, world_size=world_size)
     print("RPC initialized! Running parameter server...")
     rpc.shutdown()
@@ -224,26 +204,18 @@ def run_training_loop(rank, world_size, num_gpus, train_loader, test_loader, ulo
 
     for i, (data, target) in enumerate(train_loader):
         with dist_autograd.context() as cid:
+            # UPDATE LOCK NOTE: This is the heart of the issue. This lock was added
+            # because with it, we see the following error:
+            # RuntimeError: Error on Node 0: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [32, 1, 3, 3]] is at version 18; expected version 17 instead. Hint: enable anomaly detection to find the operation that failed to compute its gradient, with torch.autograd.set_detect_anomaly(True).
+            # Comment out to see the difference.
             with ulock:
                 model_output = net(data)
 
-                # target = target.to(model_output.device)
-
                 loss = F.nll_loss(model_output, target)
 
-                if i % 5 == 0:
+                if i % 100 == 0:
                     print(f"Rank {rank} training batch {i} loss {loss.item()}")
                 dist_autograd.backward(cid, [loss])
-                # Ensure that dist autograd ran successfully and gradients were
-                # returned.
-                # assert remote_method(
-                #     ParameterServer.get_dist_gradients,
-                #     net.param_server_rref,
-                #     cid) != {}
-                # print(remote_method(
-                #     ParameterServer.get_dist_gradients,
-                #     net.param_server_rref,
-                #     cid))
                 opt.step(cid)
 
     print(f"Worker {rank} Training complete!")
@@ -263,7 +235,6 @@ def get_accuracy(test_loader, model):
 
     with torch.no_grad():
         for i, (data, target) in enumerate(test_loader):
-            # out = model(data, -1)
             out = model(data)
             pred = out.argmax(dim=1, keepdim=True)
             pred, target = pred.to(device), target.to(device)
@@ -276,20 +247,6 @@ def get_accuracy(test_loader, model):
 # Main loop for trainers.
 def run_worker(rank, world_size, num_gpus, train_loader, test_loader, ulock, epochs=1):
     print(f"Worker rank {rank} initializing RPC")
-
-    # ---------------------------------------------
-
-    # TODO: Remove? copied from https://h-huang.github.io/tutorials/recipes/cuda_rpc.html
-    # options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=128)
-    # options.set_device_map("parameter_server", {'mps:0': 'mps:0'})
-    # print('device maps', options.device_maps)
-    # rpc.init_rpc(
-    #     name=f"trainer_{rank}",
-    #     rank=rank,
-    #     world_size=world_size, rpc_backend_options=options)
-
-    # ---------------------------------------------
-
     rpc.init_rpc(
         name=f"trainer_{rank}",
         rank=rank,
@@ -305,157 +262,41 @@ def run_worker(rank, world_size, num_gpus, train_loader, test_loader, ulock, epo
     rpc.shutdown()
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description="Parameter-Server RPC based training")
-    parser.add_argument(
-        "--world_size",
-        type=int,
-        default=4,
-        help="""Total number of participating processes. Should be the sum of
-        master node and all training nodes.""")
-    parser.add_argument(
-        "--rank",
-        type=int,
-        default=None,
-        help="Global rank of this process. Pass in 0 for master.")
-    parser.add_argument(
-        "--num_gpus",
-        type=int,
-        default=0,
-        help="""Number of GPUs to use for training, Currently supports between 0
-         and 2 GPUs. Note that this argument will be passed to the parameter servers.""")
-    parser.add_argument(
-        "--master_addr",
-        type=str,
-        default="localhost",
-        help="""Address of master, will default to localhost if not provided.
-        Master must be able to accept network traffic on the address + port.""")
-    parser.add_argument(
-        "--master_port",
-        type=str,
-        default="29500",
-        help="""Port that master is listening on, will default to 29500 if not
-        provided. Master must be able to accept network traffic on the host and port.""")
-    parser.add_argument(
-        "--epochs_per_worker",
-        type=int,
-        default=1,
-        help="""Number of epochs for each worker.""")
+def launch_ps_and_workers(
+        world_size,
+        epochs_per_worker,
+        num_gpus,
+        train_dataloader,
+        test_dataloader):
 
-    args = parser.parse_args()
-    assert args.rank is not None, "must provide rank argument."
-    assert args.num_gpus <= 3, f"Only 0-2 GPUs currently supported (got {args.num_gpus})."
-    os.environ['MASTER_ADDR'] = args.master_addr
-    os.environ["MASTER_PORT"] = args.master_port
-
-    # processes = []
-    # world_size = args.world_size
-    # if args.rank == 0:
-    #     p = mp.Process(target=run_parameter_server, args=(0, world_size))
-    #     p.start()
-    #     processes.append(p)
-    # else:
-    #     # Get data to train on
-    #     train_loader = torch.utils.data.DataLoader(
-    #         datasets.MNIST('../data', train=True, download=True,
-    #                        transform=transforms.Compose([
-    #                            transforms.ToTensor(),
-    #                            transforms.Normalize((0.1307,), (0.3081,))
-    #                        ])),
-    #         batch_size=32, shuffle=True,)
-    #     test_loader = torch.utils.data.DataLoader(
-    #         datasets.MNIST(
-    #             '../data',
-    #             train=False,
-    #             transform=transforms.Compose([
-    #                 transforms.ToTensor(),
-    #                 transforms.Normalize((0.1307,), (0.3081,))
-    #             ])),
-    #         batch_size=32,
-    #         shuffle=True,
-    #     )
-    #     # start training worker on this node
-    #     p = mp.Process(
-    #         target=run_worker,
-    #         args=(
-    #             args.rank,
-    #             world_size, args.num_gpus,
-    #             train_loader,
-    #             test_loader))
-    #     p.start()
-    #     processes.append(p)
-
-    # for p in processes:
-    #     p.join()
+    print()
+    print(
+        f'***** Training with {world_size - 1} worker(s) for {epochs_per_worker} epochs each. *****')
+    print()
 
     processes = []
-    world_size = args.world_size
     update_lock = mp.Lock()
 
-    print(f'{world_size=}')
-
-    start = time.perf_counter()
+    # Launch parameter server and workers
     for r in range(world_size):
-        print(f'{r=}')
         if r == 0:
-            print('STARTING PARAMETER SERVER')
+            # Start parameter server
             p = mp.Process(target=run_parameter_server, args=(0, world_size))
-            print('PARAMETER SERVER PROCESS RETURNED')
             p.start()
             processes.append(p)
         else:
-            print(f'STARTING WORKER {r}')
-            # Get data to train on
-            mnist_train = datasets.MNIST('../data', train=True, download=True,
-                                         transform=transforms.Compose([
-                                             transforms.ToTensor(),
-                                             transforms.Normalize(
-                                                 (0.1307,), (0.3081,))
-                                         ]))
-            mnist_train_len = len(mnist_train)
-            mnist_train_chunks = mnist_train_len // (world_size - 1)
-            start_arange = (r - 1) * mnist_train_chunks
-            end_arange = r * mnist_train_chunks
-            print(f'worker {r}: {start_arange}: {end_arange}')
-            mnist_train_subset = torch.utils.data.Subset(
-                mnist_train, list(np.arange(start_arange, end_arange)))
-            print(mnist_train_subset)
-            mnist_train_sampler = torch.utils.data.RandomSampler(
-                mnist_train_subset)
-
-            train_loader = torch.utils.data.DataLoader(
-                mnist_train_subset,
-                batch_size=32,
-                # shuffle=True,
-            )
-            test_loader = torch.utils.data.DataLoader(
-                datasets.MNIST(
-                    '../data',
-                    train=False,
-                    transform=transforms.Compose([
-                        transforms.ToTensor(),
-                        transforms.Normalize((0.1307,), (0.3081,))
-                    ])),
-                batch_size=32,
-                shuffle=True,
-            )
             # start training worker on this node
             p = mp.Process(
                 target=run_worker,
                 args=(
                     r,
-                    world_size, args.num_gpus,
-                    train_loader,
-                    test_loader,
+                    world_size, num_gpus,
+                    train_dataloader,
+                    test_dataloader,
                     update_lock,
-                    args.epochs_per_worker))
+                    epochs_per_worker))
             p.start()
             processes.append(p)
 
-    print(f'loop join')
     for p in processes:
         p.join()
-    print(f'loop join end')
-    end = time.perf_counter()
-    print(f'Elapsed time: {end - start}')
