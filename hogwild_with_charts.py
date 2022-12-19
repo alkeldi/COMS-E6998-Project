@@ -10,6 +10,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torchvision.models as models
 from torch.utils.data import DataLoader, random_split
 from torch.utils.data.sampler import Sampler
 from torchvision import datasets, transforms
@@ -41,13 +42,16 @@ def test(args, model, device, dataset, dataloader_kwargs):
 def train_epoch(epoch, args, model, device, train_data_loader, val_data_loader, optimizer):
     model.train()
     pid = os.getpid()
+    criterion = nn.CrossEntropyLoss()
     for batch_idx, (data, target) in enumerate(train_data_loader):
         optimizer.zero_grad()
         output = model(data.to(device))
         pred = output.max(1)[1]
-
-        loss = F.nll_loss(output, target.to(device))
+        loss = criterion(output, target.to(device))
         loss.backward()
+        # output.backward()
+        # loss = F.nll_loss(output, target.to(device))
+        # loss.backward()
         optimizer.step()
         if batch_idx % args.log_interval == 0:
             print('{}\tTrain Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -58,26 +62,26 @@ def train_epoch(epoch, args, model, device, train_data_loader, val_data_loader, 
                 break
 
     # validation
-    model.eval()
-    valid_loss = 0.0
-    total_correct = 0
-    total = 0
+    # model.eval()
+    # valid_loss = 0.0
+    # total_correct = 0
+    # total = 0
 
-    # with torch.no_grad():
-    for batch_idx, (data, target) in enumerate(val_data_loader):
-        output = model(data.to(device))
-        loss = F.nll_loss(output, target.to(device))
-        valid_loss += loss.item()
+    # # with torch.no_grad():
+    # for batch_idx, (data, target) in enumerate(val_data_loader):
+    #     output = model(data.to(device))
+    #     loss = F.nll_loss(output, target.to(device))
+    #     valid_loss += loss.item()
 
-        # predictions = torch.argmax(output, dim=1)
-        pred = output.max(1)[1]
-        correct = sum(pred == target).item()
-        total_correct += correct
-        total += len(data)
+    #     # predictions = torch.argmax(output, dim=1)
+    #     pred = output.max(1)[1]
+    #     correct = sum(pred == target).item()
+    #     total_correct += correct
+    #     total += len(data)
 
-    print('Val Accuracy', total_correct / total)
-    print(
-        f'Epoch {epoch} \t\t Validation Loss: {valid_loss / len(val_data_loader)}')
+    # print('Val Accuracy', total_correct / total)
+    # print(
+    #     f'Epoch {epoch} \t\t Validation Loss: {valid_loss / len(val_data_loader)}')
 
 
 def test_epoch(model, device, data_loader):
@@ -175,8 +179,11 @@ class LeNet5(nn.Module):
         out = self.relu1(out)
         out = self.fc2(out)
         return F.log_softmax(out, dim=1)
+
         # return out
 
+
+resnet18 = models.resnet18(pretrained=False)
 
 if __name__ == '__main__':
     start = time.time()
@@ -196,30 +203,29 @@ if __name__ == '__main__':
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
     ])
-    train_data = datasets.MNIST('../data', train=True, download=True,
+    train_data = datasets.MNIST('./data', train=True, download=True,
                                 transform=transform)
     train_size = int(len(train_data) * 0.8)
     val_size = int(len(train_data) - train_size)
-    print(train_size, val_size)
     train_data, val_data = random_split(train_data, [train_size, val_size])
-    test_data = datasets.MNIST('../data', train=False,
+    test_data = datasets.MNIST('./data', train=False,
                                transform=transform)
 
     train_data = datasets.CIFAR10(
         root='./CIFAR10', train=True, download=True,
         transform=transforms.Compose([
             transforms.ToTensor(),
-            transforms.Grayscale()
+            # transforms.Grayscale()
         ])
     )
     train_size = int(len(train_data) * 0.8)
     val_size = int(len(train_data) - train_size)
     train_data, val_data = random_split(train_data, [train_size, val_size])
-    testset = datasets.CIFAR10(
+    test_data = datasets.CIFAR10(
         root='./CIFAR10', train=False, download=True,
         transform=transforms.Compose([
             transforms.ToTensor(),
-            transforms.Grayscale()
+            # transforms.Grayscale()
         ])
     )
 
@@ -234,7 +240,8 @@ if __name__ == '__main__':
     mp.set_start_method('spawn', force=True)
 
     # model = Net().to(device)
-    model = LeNet5().to(device)
+    # model = LeNet5().to(device)
+    model = resnet18.to(device)
     model.share_memory()  # gradients are allocated lazily, so they are not shared here
 
     processes = []
