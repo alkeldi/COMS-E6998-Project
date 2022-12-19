@@ -69,7 +69,7 @@ def log_elapsed_time(
     start,
     end): {...}
 ```
-`log_elapsed_time` is a small helper function to log how it took to train a particular model.
+`log_elapsed_time` is a small helper function to log how long it took to train a particular model.
 
 ```
 def chart_losses(
