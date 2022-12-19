@@ -30,7 +30,7 @@ To test Apple's unified memory, one can run the script in `unified_memory_overhe
 
 ![unified](./unified_memory_overhead.png)
 
-Although in theory the overhead should be minimal, the plot shows a huge slowdown caused by moving the model back and forth.
+Although in theory the overhead should be minimal, the plot shows a huge slowdown caused by moving the model back and forth. If it's true that the GPU and the CPU can share the model memory, then one could use `Approach 3` with one of the worker utilizing the GPU. This way, the performance should hugley increase, but more research is needed in this area.
 
 
 ## Approach 2: Parameter Server
