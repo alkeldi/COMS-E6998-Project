@@ -7,7 +7,14 @@
 ## Summary
 Deep learning can be time consuming and cost prohibitive for individuals. Can we effectively reduce training time on personal machines with minimal code change?
 
-Approach: Experiment with different parallel training methods on individual machines and compare results. See Slide Deck for further details.
+Approach: Experiment with different parallel training methods on individual machines and compare results. See Slide Deck for further details. The repository is divided into each of the 3 experiements:  
+
+Approach 1: `unified_memory_overhead.py`  
+Approach 2: `parameter_server` directory  
+Approach 3: `hogwild` directory  
+
+More details about each approach can be found below.
+
 
 ## References
 - Parameter Servers (With Distributed Autograd)
